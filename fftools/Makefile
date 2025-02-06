@@ -23,7 +23,7 @@ OBJS-ffmpeg +=                  \
     fftools/sync_queue.o        \
     fftools/thread_queue.o      \
 
-OBJS-ffplay += fftools/ffplay_renderer.o
+OBJS-ffplay += fftools/ffplay_renderer.o fftools/ffplay_queue.o fftools/ffplay_clock.o fftools/ffplay_decoder.o
 
 define DOFFTOOL
 OBJS-$(1) += fftools/cmdutils.o fftools/opt_common.o fftools/$(1).o $(OBJS-$(1)-yes)
