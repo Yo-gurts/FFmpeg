@@ -1,10 +1,7 @@
 #ifndef FFPLAY_QUEUE_H
 #define FFPLAY_QUEUE_H
 
-#include <SDL.h>
-#include <SDL_thread.h>
-
-#include "ffplay_queue.h"
+#include <pthread.h>
 #include "libavcodec/avcodec.h"
 #include "libavutil/fifo.h"
 
@@ -27,8 +24,8 @@ typedef struct PacketQueue {
     int64_t duration;
     int abort_request;
     int serial;
-    SDL_mutex *mutex;
-    SDL_cond *cond;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
 } PacketQueue;
 
 
@@ -56,8 +53,8 @@ typedef struct FrameQueue {
     int max_size;
     int keep_last;
     int rindex_shown;
-    SDL_mutex *mutex;
-    SDL_cond *cond;
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
     PacketQueue *pktq;
 } FrameQueue;
 
