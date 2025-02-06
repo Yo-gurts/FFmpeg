@@ -1,11 +1,10 @@
 #include <stdio.h>
-
+#include <pthread.h>
 #include "ffplay_decoder.h"
-
 
 static int decoder_reorder_pts = -1;
 
-int decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, SDL_cond *empty_queue_cond) {
+int decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, pthread_cond_t *empty_queue_cond) {
     memset(d, 0, sizeof(Decoder));
     d->pkt = av_packet_alloc();
     if (!d->pkt)
@@ -65,7 +64,7 @@ int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub) {
 
         do {
             if (d->queue->nb_packets == 0)
-                SDL_CondSignal(d->empty_queue_cond);
+                pthread_cond_signal(d->empty_queue_cond);
             if (d->packet_pending) {
                 d->packet_pending = 0;
             } else {

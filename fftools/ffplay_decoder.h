@@ -1,9 +1,7 @@
 #ifndef FFPLAY_DECODER_H
 #define FFPLAY_DECODER_H
 
-#include <SDL.h>
-#include <SDL_thread.h>
-
+#include <pthread.h>
 #include "ffplay_queue.h"
 
 typedef struct FrameData {
@@ -17,15 +15,15 @@ typedef struct Decoder {
     int pkt_serial;
     int finished;
     int packet_pending;
-    SDL_cond *empty_queue_cond;
+    pthread_cond_t *empty_queue_cond;
     int64_t start_pts;
     AVRational start_pts_tb;
     int64_t next_pts;
     AVRational next_pts_tb;
-    SDL_Thread *decoder_tid;
+    pthread_t decoder_tid;
 } Decoder;
 
-int decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, SDL_cond *empty_queue_cond);
+int decoder_init(Decoder *d, AVCodecContext *avctx, PacketQueue *queue, pthread_cond_t *empty_queue_cond);
 int decoder_decode_frame(Decoder *d, AVFrame *frame, AVSubtitle *sub);
 void decoder_destroy(Decoder *d);
 

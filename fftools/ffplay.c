@@ -23,12 +23,14 @@
  * simple media player based on the FFmpeg libraries
  */
 
+ #define _GNU_SOURCE             /* See feature_test_macros(7) */
 #include "config.h"
 #include "config_components.h"
 #include <math.h>
 #include <limits.h>
 #include <signal.h>
 #include <stdint.h>
+#include <pthread.h>
 
 #include "libavutil/avstring.h"
 #include "libavutil/channel_layout.h"
@@ -301,7 +303,7 @@ typedef struct VideoState {
 
     int last_video_stream, last_audio_stream, last_subtitle_stream;
 
-    SDL_cond *continue_read_thread;
+    pthread_cond_t continue_read_thread;
 } VideoState;
 
 /* options specified by the user */
@@ -821,8 +823,9 @@ static void decoder_abort(Decoder *d, FrameQueue *fq)
 {
     packet_queue_abort(d->queue);
     frame_queue_signal(fq);
-    SDL_WaitThread(d->decoder_tid, NULL);
-    d->decoder_tid = NULL;
+    // SDL_WaitThread(d->decoder_tid, NULL);
+    pthread_join(d->decoder_tid, NULL);
+    // d->decoder_tid = NULL;
     packet_queue_flush(d->queue);
 }
 
@@ -1292,7 +1295,7 @@ static void stream_close(VideoState *is)
     frame_queue_destroy(&is->pictq);
     frame_queue_destroy(&is->sampq);
     frame_queue_destroy(&is->subpq);
-    SDL_DestroyCond(is->continue_read_thread);
+    pthread_cond_destroy(&is->continue_read_thread);
     sws_freeContext(is->sub_convert_ctx);
     av_free(is->filename);
     if (is->vis_texture)
@@ -1493,7 +1496,7 @@ static void stream_seek(VideoState *is, int64_t pos, int64_t rel, int by_bytes)
         if (by_bytes)
             is->seek_flags |= AVSEEK_FLAG_BYTE;
         is->seek_req = 1;
-        SDL_CondSignal(is->continue_read_thread);
+        pthread_cond_signal(&is->continue_read_thread);
     }
 }
 
@@ -2066,7 +2069,7 @@ end:
     return ret;
 }
 
-static int audio_thread(void *arg)
+static void *audio_thread(void *arg)
 {
     VideoState *is = arg;
     AVFrame *frame = av_frame_alloc();
@@ -2078,7 +2081,8 @@ static int audio_thread(void *arg)
     int ret = 0;
 
     if (!frame)
-        return AVERROR(ENOMEM);
+        return NULL;
+        // return AVERROR(ENOMEM);
 
     do {
         if ((got_frame = decoder_decode_frame(&is->auddec, frame, NULL)) < 0)
@@ -2141,21 +2145,26 @@ static int audio_thread(void *arg)
  the_end:
     avfilter_graph_free(&is->agraph);
     av_frame_free(&frame);
-    return ret;
+    // return ret;
+    return NULL;
 }
 
-static int decoder_start(Decoder *d, int (*fn)(void *), const char *thread_name, void* arg)
+static int decoder_start(Decoder *d, void *(*fn)(void *), const char *thread_name, void* arg)
 {
+    int ret = 0;
     packet_queue_start(d->queue);
-    d->decoder_tid = SDL_CreateThread(fn, thread_name, arg);
-    if (!d->decoder_tid) {
-        av_log(NULL, AV_LOG_ERROR, "SDL_CreateThread(): %s\n", SDL_GetError());
+    ret = pthread_create(&d->decoder_tid, NULL, fn, arg);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_ERROR, "pthread_create(): %s\n", strerror(ret));
         return AVERROR(ENOMEM);
     }
+    // set thread name
+    pthread_setname_np(d->decoder_tid, thread_name);
+
     return 0;
 }
 
-static int video_thread(void *arg)
+static void *video_thread(void *arg)
 {
     VideoState *is = arg;
     AVFrame *frame = av_frame_alloc();
@@ -2174,7 +2183,8 @@ static int video_thread(void *arg)
     int last_vfilter_idx = 0;
 
     if (!frame)
-        return AVERROR(ENOMEM);
+        return NULL;
+        // return AVERROR(ENOMEM);
 
     for (;;) {
         ret = get_video_frame(is, frame);
@@ -2258,7 +2268,7 @@ static int video_thread(void *arg)
     return 0;
 }
 
-static int subtitle_thread(void *arg)
+static void *subtitle_thread(void *arg)
 {
     VideoState *is = arg;
     Frame *sp;
@@ -2741,7 +2751,7 @@ static int stream_component_open(VideoState *is, int stream_index)
         is->audio_stream = stream_index;
         is->audio_st = ic->streams[stream_index];
 
-        if ((ret = decoder_init(&is->auddec, avctx, &is->audioq, is->continue_read_thread)) < 0)
+        if ((ret = decoder_init(&is->auddec, avctx, &is->audioq, &is->continue_read_thread)) < 0)
             goto fail;
         if (is->ic->iformat->flags & AVFMT_NOTIMESTAMPS) {
             is->auddec.start_pts = is->audio_st->start_time;
@@ -2755,7 +2765,7 @@ static int stream_component_open(VideoState *is, int stream_index)
         is->video_stream = stream_index;
         is->video_st = ic->streams[stream_index];
 
-        if ((ret = decoder_init(&is->viddec, avctx, &is->videoq, is->continue_read_thread)) < 0)
+        if ((ret = decoder_init(&is->viddec, avctx, &is->videoq, &is->continue_read_thread)) < 0)
             goto fail;
         if ((ret = decoder_start(&is->viddec, video_thread, "video_decoder", is)) < 0)
             goto out;
@@ -2765,7 +2775,7 @@ static int stream_component_open(VideoState *is, int stream_index)
         is->subtitle_stream = stream_index;
         is->subtitle_st = ic->streams[stream_index];
 
-        if ((ret = decoder_init(&is->subdec, avctx, &is->subtitleq, is->continue_read_thread)) < 0)
+        if ((ret = decoder_init(&is->subdec, avctx, &is->subtitleq, &is->continue_read_thread)) < 0)
             goto fail;
         if ((ret = decoder_start(&is->subdec, subtitle_thread, "subtitle_decoder", is)) < 0)
             goto out;
@@ -2824,12 +2834,14 @@ static int read_thread(void *arg)
     int64_t stream_start_time;
     int pkt_in_play_range = 0;
     const AVDictionaryEntry *t;
-    SDL_mutex *wait_mutex = SDL_CreateMutex();
+    // SDL_mutex *wait_mutex = SDL_CreateMutex();
+    pthread_mutex_t wait_mutex;
     int scan_all_pmts_set = 0;
     int64_t pkt_ts;
+    const struct timespec ts = { 10, 0 };
 
-    if (!wait_mutex) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateMutex(): %s\n", SDL_GetError());
+    if (pthread_mutex_init(&wait_mutex, NULL)) {
+        av_log(NULL, AV_LOG_FATAL, "pthread_mutex_init(): %s\n", strerror(errno));
         ret = AVERROR(ENOMEM);
         goto fail;
     }
@@ -3069,9 +3081,9 @@ static int read_thread(void *arg)
                 stream_has_enough_packets(is->video_st, is->video_stream, &is->videoq) &&
                 stream_has_enough_packets(is->subtitle_st, is->subtitle_stream, &is->subtitleq)))) {
             /* wait 10 ms */
-            SDL_LockMutex(wait_mutex);
-            SDL_CondWaitTimeout(is->continue_read_thread, wait_mutex, 10);
-            SDL_UnlockMutex(wait_mutex);
+            pthread_mutex_lock(&wait_mutex);
+            pthread_cond_timedwait(&is->continue_read_thread, &wait_mutex, &ts);
+            pthread_mutex_unlock(&wait_mutex);
             continue;
         }
         if (!is->paused &&
@@ -3101,9 +3113,9 @@ static int read_thread(void *arg)
                 else
                     break;
             }
-            SDL_LockMutex(wait_mutex);
-            SDL_CondWaitTimeout(is->continue_read_thread, wait_mutex, 10);
-            SDL_UnlockMutex(wait_mutex);
+            pthread_mutex_lock(&wait_mutex);
+            pthread_cond_timedwait(&is->continue_read_thread, &wait_mutex, &ts);
+            pthread_mutex_unlock(&wait_mutex);
             continue;
         } else {
             is->eof = 0;
@@ -3141,7 +3153,7 @@ static int read_thread(void *arg)
         event.user.data1 = is;
         SDL_PushEvent(&event);
     }
-    SDL_DestroyMutex(wait_mutex);
+    pthread_mutex_destroy(&wait_mutex);
     return 0;
 }
 
@@ -3176,8 +3188,8 @@ static VideoState *stream_open(const char *filename,
         packet_queue_init(&is->subtitleq) < 0)
         goto fail;
 
-    if (!(is->continue_read_thread = SDL_CreateCond())) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateCond(): %s\n", SDL_GetError());
+    if (pthread_cond_init(&is->continue_read_thread, NULL)) {
+        av_log(NULL, AV_LOG_FATAL, "pthread_cond_init(): %s\n", strerror(errno));
         goto fail;
     }
 
