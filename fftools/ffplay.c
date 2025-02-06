@@ -204,7 +204,8 @@ enum {
 // } Decoder;
 
 typedef struct VideoState {
-    SDL_Thread *read_tid;
+    // SDL_Thread *read_tid;
+    pthread_t read_tid;
     const AVInputFormat *iformat;
     int abort_request;
     int force_refresh;
@@ -1275,7 +1276,8 @@ static void stream_close(VideoState *is)
 {
     /* XXX: use a special url_shutdown call to abort parse cleanly */
     is->abort_request = 1;
-    SDL_WaitThread(is->read_tid, NULL);
+    // SDL_WaitThread(is->read_tid, NULL);
+    pthread_join(is->read_tid, NULL);
 
     /* close each stream */
     if (is->audio_stream >= 0)
@@ -2824,7 +2826,7 @@ static int is_realtime(AVFormatContext *s)
 }
 
 /* this thread gets the stream from the disk or the network */
-static int read_thread(void *arg)
+static void *read_thread(void *arg)
 {
     VideoState *is = arg;
     AVFormatContext *ic = NULL;
@@ -3161,6 +3163,7 @@ static VideoState *stream_open(const char *filename,
                                const AVInputFormat *iformat)
 {
     VideoState *is;
+    int ret = 0;
 
     is = av_mallocz(sizeof(VideoState));
     if (!is)
@@ -3206,13 +3209,21 @@ static VideoState *stream_open(const char *filename,
     is->audio_volume = startup_volume;
     is->muted = 0;
     is->av_sync_type = av_sync_type;
-    is->read_tid     = SDL_CreateThread(read_thread, "read_thread", is);
-    if (!is->read_tid) {
-        av_log(NULL, AV_LOG_FATAL, "SDL_CreateThread(): %s\n", SDL_GetError());
+//     is->read_tid     = SDL_CreateThread(read_thread, "read_thread", is);
+//     if (!is->read_tid) {
+//         av_log(NULL, AV_LOG_FATAL, "SDL_CreateThread(): %s\n", SDL_GetError());
+// fail:
+//         stream_close(is);
+//         return NULL;
+//     }
+    ret = pthread_create(&is->read_tid, NULL, read_thread, is);
+    if (ret < 0) {
+        av_log(NULL, AV_LOG_FATAL, "pthread_create(): %s\n", strerror(errno));
 fail:
         stream_close(is);
         return NULL;
     }
+    pthread_setname_np(is->read_tid, "read_thread");
     return is;
 }
 
