@@ -819,7 +819,6 @@ int cmp_audio_fmts(enum AVSampleFormat fmt1, int64_t channel_count1,
 //     else
 //         return -1;
 // }
-
 static void decoder_abort(Decoder *d, FrameQueue *fq)
 {
     packet_queue_abort(d->queue);
@@ -1591,6 +1590,32 @@ static void update_video_pts(VideoState *is, double pts, int serial)
     sync_clock_to_slave(&is->extclk, &is->vidclk);
 }
 
+/*
+video_refresh 是 FFplay 的视频刷新核心函数，主要完成以下工作：
+
+视频同步：
+检查外部时钟速度
+计算视频帧的显示延迟时间
+维护帧计时器（frame_timer）
+处理音视频同步
+帧处理：
+从队列中获取视频帧
+处理帧的序列号（serial）确保正确性
+计算帧的持续时间
+必要时丢帧（处理播放延迟）
+字幕处理：
+管理字幕的显示时间
+清理过期的字幕
+更新字幕纹理
+状态显示：
+显示播放状态（如果开启）
+包括：
+主时钟时间
+音视频同步差异（A-V）
+丢帧数量
+音视频队列大小
+简单说，这个函数就是视频播放器的"心脏"，负责按正确的时间显示视频帧，处理音视频同步，并管理字幕显示。
+*/
 /* called to display each frame */
 static void video_refresh(void *opaque, double *remaining_time)
 {
@@ -2653,11 +2678,22 @@ static int stream_component_open(VideoState *is, int stream_index)
     if (!avctx)
         return AVERROR(ENOMEM);
 
+    /* 将流的编解码参数复制到解码器上下文 codecpar 包含了编解码需要的所有参数，比如：
+        视频的分辨率、像素格式
+        音频的采样率、声道数
+        编码格式（H.264, AAC等）*/
     ret = avcodec_parameters_to_context(avctx, ic->streams[stream_index]->codecpar);
     if (ret < 0)
         goto fail;
+    /* 设置时间基准（timebase）
+        timebase 是用来表示时间戳的单位
+        比如 time_base = 1/90000 表示时间戳的单位是1/90000秒
+        这个对于音视频同步很重要 */
     avctx->pkt_timebase = ic->streams[stream_index]->time_base;
 
+    /* 根据编码格式（codec_id）找到对应的解码器 比如：
+        如果是H.264视频，就找到H.264解码器
+        如果是AAC音频，就找到AAC解码器*/
     codec = avcodec_find_decoder(avctx->codec_id);
 
     switch(avctx->codec_type){
@@ -2665,6 +2701,7 @@ static int stream_component_open(VideoState *is, int stream_index)
         case AVMEDIA_TYPE_SUBTITLE: is->last_subtitle_stream = stream_index; forced_codec_name = subtitle_codec_name; break;
         case AVMEDIA_TYPE_VIDEO   : is->last_video_stream    = stream_index; forced_codec_name =    video_codec_name; break;
     }
+    // 如果有强制解码器名字，使用指定的解码器
     if (forced_codec_name)
         codec = avcodec_find_decoder_by_name(forced_codec_name);
     if (!codec) {
@@ -2676,12 +2713,37 @@ static int stream_component_open(VideoState *is, int stream_index)
         goto fail;
     }
 
+    // 万一强制指定了解码器，更新一下 avctx->codec_id 的值。
     avctx->codec_id = codec->id;
+    /* lowres（低分辨率）是FFmpeg中用于控制解码输出分辨率的一个参数。让我详细解释：
+    基本概念：
+        lowres 是一个缩放因子
+        值为n时，表示输出分辨率是原始分辨率的 1/(2^n)
+        比如：
+        lowres = 0：原始分辨率（1920x1080）
+        lowres = 1：一半分辨率（960x540）
+        lowres = 2：四分之一分辨率（480x270）
+    使用场景：
+        在性能受限的设备上播放高分辨率视频
+        预览时不需要完整分辨率
+        降低内存和CPU使用率
+    举个实际例子：
+        原视频是4K分辨率（3840x2160）
+        如果设置 lowres = 1
+        解码后直接输出 1920x1080
+        不需要额外的缩放步骤
+        节省了内存和计算资源
+        但如果解码器最大只支持 lowres = 2
+        即使你设置了更大的值
+        也只会降到四分之一分辨率
+    */
     if (stream_lowres > codec->max_lowres) {
         av_log(avctx, AV_LOG_WARNING, "The maximum value for lowres supported by the decoder is %d\n",
                 codec->max_lowres);
         stream_lowres = codec->max_lowres;
     }
+    // h264 的这个lowers 只支持0. 原比例。 1 的话长宽缩放一倍。
+    printf("stream_lowres = %d, lowres = %d\n", stream_lowres, lowres);
     avctx->lowres = stream_lowres;
 
     if (fast)
@@ -2692,6 +2754,10 @@ static int stream_component_open(VideoState *is, int stream_index)
     if (ret < 0)
         goto fail;
 
+    /* 设置解码线程数
+如果用户没有指定线程数，就设置为"auto"
+"auto"表示FFmpeg会根据CPU核心数自动选择合适的线程数
+多线程解码可以提高解码速度 */
     if (!av_dict_get(opts, "threads", NULL, 0))
         av_dict_set(&opts, "threads", "auto", 0);
     if (stream_lowres)
@@ -2888,31 +2954,31 @@ static void *read_thread(void *arg)
     if (genpts)
         ic->flags |= AVFMT_FLAG_GENPTS;
 
-    if (find_stream_info) {
-        AVDictionary **opts;
-        int orig_nb_streams = ic->nb_streams;
+    // if (find_stream_info) {
+    //     AVDictionary **opts;
+    //     int orig_nb_streams = ic->nb_streams;
 
-        err = setup_find_stream_info_opts(ic, codec_opts, &opts);
-        if (err < 0) {
-            av_log(NULL, AV_LOG_ERROR,
-                   "Error setting up avformat_find_stream_info() options\n");
-            ret = err;
-            goto fail;
-        }
+    //     err = setup_find_stream_info_opts(ic, codec_opts, &opts);
+    //     if (err < 0) {
+    //         av_log(NULL, AV_LOG_ERROR,
+    //                "Error setting up avformat_find_stream_info() options\n");
+    //         ret = err;
+    //         goto fail;
+    //     }
 
-        err = avformat_find_stream_info(ic, opts);
+    //     err = avformat_find_stream_info(ic, opts);
 
-        for (i = 0; i < orig_nb_streams; i++)
-            av_dict_free(&opts[i]);
-        av_freep(&opts);
+    //     for (i = 0; i < orig_nb_streams; i++)
+    //         av_dict_free(&opts[i]);
+    //     av_freep(&opts);
 
-        if (err < 0) {
-            av_log(NULL, AV_LOG_WARNING,
-                   "%s: could not find codec parameters\n", is->filename);
-            ret = -1;
-            goto fail;
-        }
-    }
+    //     if (err < 0) {
+    //         av_log(NULL, AV_LOG_WARNING,
+    //                "%s: could not find codec parameters\n", is->filename);
+    //         ret = -1;
+    //         goto fail;
+    //     }
+    // }
 
     if (ic->pb)
         ic->pb->eof_reached = 0; // FIXME hack, ffplay maybe should not use avio_feof() to test for the end
@@ -2944,16 +3010,54 @@ static void *read_thread(void *arg)
 
     is->realtime = is_realtime(ic);
 
+    // 显示文件流信息
+/*
+Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '1080x720p.mp4': 0B
+  Metadata:
+    major_brand     : isom
+    minor_version   : 512
+    compatible_brands: isomiso2avc1mp41
+    encoder         : Lavf58.20.100
+  Duration: N/A, bitrate: N/A
+  Stream #0:0[0x1](und): Video: h264 (avc1 / 0x31637661), none, 1080x720, 1125 kb/s, SAR 32:27 DAR 16:9, 24 fps, 24 tbr, 12288 tbn (default)
+      Metadata:
+        handler_name    : VideoHandler
+        vendor_id       : [0][0][0][0]
+  Stream #0:1[0x2](und): Audio: aac (mp4a / 0x6134706D), 44100 Hz, 2 channels, 128 kb/s (default)
+      Metadata:
+        handler_name    : SoundHandler
+        vendor_id       : [0][0][0][0]
+[swscaler @ 0x7f4c8c5a9f00] No accelerate
+*/
     if (show_status)
         av_dump_format(ic, 0, is->filename, 0);
 
+    /* 主要功能：
+    遍历所有的媒体流
+    默认先标记所有流为丢弃状态（AVDISCARD_ALL）
+    根据用户的选择（wanted_stream_spec）来选择要播放的流
+    将选中的流的索引保存在 st_index 数组中
+    实际应用场景：
+    当用户只想播放视频不要音频时
+    当用户想选择特定语言的音轨时
+    当用户想选择特定的字幕流时
+    当媒体文件有多个相同类型的流时，需要选择其中一个
+    这就像在看电影时选择音轨和字幕的过程，这段代码就是在确定最终要播放哪些流。
+
+    ffplay -ast 1 video.mp4  # 选择第二个音频流（索引从0开始） wanted_stream_spec[audio] = 1
+    ffplay -vst 0 video.mp4  # 选择第一个视频流 wanted_stream_spec[video] = 0
+    ffplay -sst 2 video.mp4  # 选择第三个字幕流 wanted_stream_spec[subtitile] = 2
+    比如有多个字母流的时候，选择第几个播放 wanted_stream_spec[type]。
+    */
     for (i = 0; i < ic->nb_streams; i++) {
         AVStream *st = ic->streams[i];
         enum AVMediaType type = st->codecpar->codec_type;
         st->discard = AVDISCARD_ALL;
-        if (type >= 0 && wanted_stream_spec[type] && st_index[type] == -1)
+        if (type >= 0 && wanted_stream_spec[type] && st_index[type] == -1) {
+            // 如果 wanted_stream_spec 没指定的话，默认就选第一个，下面的 st_index[type] = 1 也不会设置到。
             if (avformat_match_stream_specifier(ic, st, wanted_stream_spec[type]) > 0)
                 st_index[type] = i;
+        }
     }
     for (i = 0; i < AVMEDIA_TYPE_NB; i++) {
         if (wanted_stream_spec[i] && st_index[i] == -1) {
@@ -2962,10 +3066,13 @@ static void *read_thread(void *arg)
         }
     }
 
-    if (!video_disable)
-        st_index[AVMEDIA_TYPE_VIDEO] =
-            av_find_best_stream(ic, AVMEDIA_TYPE_VIDEO,
-                                st_index[AVMEDIA_TYPE_VIDEO], -1, NULL, 0);
+    if (!video_disable)    // 如果视频没有被禁用
+        st_index[AVMEDIA_TYPE_VIDEO] = av_find_best_stream(ic,           // 格式上下文
+                                    AVMEDIA_TYPE_VIDEO,                // 要找的流类型：视频
+                                    st_index[AVMEDIA_TYPE_VIDEO],      // 当前选中的视频流索引 这里不为0 的话就说明用户指定了。为0 就自动找一个合适的。
+                                    -1,                                // 相关流的索引，这里不需要
+                                    NULL,                             // 不需要查找解码器
+                                    0);                               // 标志位
     if (!audio_disable)
         st_index[AVMEDIA_TYPE_AUDIO] =
             av_find_best_stream(ic, AVMEDIA_TYPE_AUDIO,
@@ -2981,6 +3088,20 @@ static void *read_thread(void *arg)
                                  st_index[AVMEDIA_TYPE_VIDEO]),
                                 NULL, 0);
 
+    /* av_guess_sample_aspect_ratio 是用来猜测像素的宽高比（SAR, Sample Aspect Ratio）：
+    SAR 是单个像素的宽高比
+    不同于 DAR（Display Aspect Ratio，显示宽高比）
+    不同于纯粹的分辨率宽高比
+    比如一个视频：
+    - 分辨率是720x576（分辨率宽高比是720:576，约等于1.25:1）
+    - SAR是16:15
+    - 最终的显示比例DAR就是 (720 * 16):(576 * 15) = 4:3
+
+    也就是说虽然像素点是720x576，但因为每个像素点不是正方形的（SAR=16:15），
+    所以最终显示出来的画面是4:3的。
+
+    首先获取视频的SAR 然后根据视频的宽度、高度和SAR来设置窗口大小 这样可以确保视频显示时不会变形
+    */
     is->show_mode = show_mode;
     if (st_index[AVMEDIA_TYPE_VIDEO] >= 0) {
         AVStream *st = ic->streams[st_index[AVMEDIA_TYPE_VIDEO]];
@@ -3026,16 +3147,16 @@ static void *read_thread(void *arg)
             else
                 av_read_play(ic);
         }
-#if CONFIG_RTSP_DEMUXER || CONFIG_MMSH_PROTOCOL
-        if (is->paused &&
-                (!strcmp(ic->iformat->name, "rtsp") ||
-                 (ic->pb && !strncmp(input_filename, "mmsh:", 5)))) {
-            /* wait 10 ms to avoid trying to get another packet */
-            /* XXX: horrible */
-            SDL_Delay(10);
-            continue;
-        }
-#endif
+// #if CONFIG_RTSP_DEMUXER || CONFIG_MMSH_PROTOCOL
+//         if (is->paused &&
+//                 (!strcmp(ic->iformat->name, "rtsp") ||
+//                  (ic->pb && !strncmp(input_filename, "mmsh:", 5)))) {
+//             /* wait 10 ms to avoid trying to get another packet */
+//             /* XXX: horrible */
+//             SDL_Delay(10);
+//             continue;
+//         }
+// #endif
         if (is->seek_req) {
             int64_t seek_target = is->seek_pos;
             int64_t seek_min    = is->seek_rel > 0 ? seek_target - is->seek_rel + 2: INT64_MIN;
@@ -3066,6 +3187,19 @@ static void *read_thread(void *arg)
             if (is->paused)
                 step_to_next_frame(is);
         }
+        /* 使用场景：
+                播放音乐文件时显示专辑封面
+                视频文件的预览图
+                媒体库中显示缩略图
+            
+        工作流程：
+            检测到需要处理附加图片的请求
+            确认视频流中有附加图片
+            将图片数据复制到新的包中
+            把图片包放入视频队列
+            放入一个空包表示图片数据结束
+            清除请求标志
+        */
         if (is->queue_attachments_req) {
             if (is->video_st && is->video_st->disposition & AV_DISPOSITION_ATTACHED_PIC) {
                 if ((ret = av_packet_ref(pkt, &is->video_st->attached_pic)) < 0)
@@ -3077,6 +3211,7 @@ static void *read_thread(void *arg)
         }
 
         /* if the queue are full, no need to read more */
+        /* 如果队列较长且流没有读完的就休眠10ms  */
         if (infinite_buffer<1 &&
               (is->audioq.size + is->videoq.size + is->subtitleq.size > MAX_QUEUE_SIZE
             || (stream_has_enough_packets(is->audio_st, is->audio_stream, &is->audioq) &&
@@ -3088,6 +3223,7 @@ static void *read_thread(void *arg)
             pthread_mutex_unlock(&wait_mutex);
             continue;
         }
+        /* 如果没有暂停并且音频和视频都读完了 */
         if (!is->paused &&
             (!is->audio_st || (is->auddec.finished == is->audioq.serial && frame_queue_nb_remaining(&is->sampq) == 0)) &&
             (!is->video_st || (is->viddec.finished == is->videoq.serial && frame_queue_nb_remaining(&is->pictq) == 0))) {
@@ -3324,6 +3460,22 @@ static void toggle_audio_display(VideoState *is)
     }
 }
 
+/* 
+这是视频播放器的刷新循环函数，主要做三件事：
+
+鼠标光标处理：
+如果鼠标长时间不动（超过CURSOR_HIDE_DELAY），就自动隐藏光标
+这是视频播放器的常见功能
+视频刷新：
+按照固定的刷新率（REFRESH_RATE）刷新视频画面
+在非暂停状态或强制刷新时调用 video_refresh
+remaining_time 用来控制刷新的时间间隔
+事件处理：
+通过 SDL_PumpEvents 处理系统事件
+使用 SDL_PeepEvents 检查是否有新事件
+如果没有事件就继续刷新循环
+简单来说，这就是一个视频播放器的心跳，负责定时刷新画面和处理用户输入，同时还要处理一些UI细节比如自动隐藏鼠标。
+*/
 static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
     double remaining_time = 0.0;
     SDL_PumpEvents();
@@ -3334,7 +3486,7 @@ static void refresh_loop_wait_event(VideoState *is, SDL_Event *event) {
         }
         if (remaining_time > 0.0)
             av_usleep((int64_t)(remaining_time * 1000000.0));
-        remaining_time = REFRESH_RATE;
+        remaining_time = REFRESH_RATE; // 这个刷新率并不是音频或者视频的，而是轮询的间隔，设定为10ms
         if (is->show_mode != SHOW_MODE_NONE && (!is->paused || is->force_refresh))
             video_refresh(is, &remaining_time);
         SDL_PumpEvents();
