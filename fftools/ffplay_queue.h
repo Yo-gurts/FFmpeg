@@ -71,6 +71,11 @@ void frame_queue_unref_item(Frame *vp);
 int frame_queue_init(FrameQueue *f, PacketQueue *pktq, int max_size, int keep_last);
 void frame_queue_destroy(FrameQueue *f);
 void frame_queue_signal(FrameQueue *f);
+/* peek 在编程中是一个常用术语，意思是"偷看"或"查看"，它有以下特点：
+    只读取数据，不修改数据
+    不会改变队列/栈的状态
+    与之相对的是 pop（弹出）操作，pop 会取出并删除数据
+*/
 Frame *frame_queue_peek(FrameQueue *f);
 Frame *frame_queue_peek_next(FrameQueue *f);
 Frame *frame_queue_peek_last(FrameQueue *f);

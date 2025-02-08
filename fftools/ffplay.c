@@ -1062,155 +1062,170 @@ static inline int compute_mod(int a, int b)
     return a < 0 ? a%b + b : a%b;
 }
 
+/*
+是的，这段代码是在处理音频可视化显示的部分。具体来说，这是video_audio_display函数的一部分，它的主要功能是：
+
+音频可视化有两种显示模式：
+SHOW_MODE_WAVES：波形显示模式，显示音频的波形
+频谱模式（通过RDFT计算）：显示音频的频率分布
+这段代码主要在做：
+计算音频数据的显示参数（rdft_bits用于频谱分析）
+处理音频缓冲区的延迟
+计算显示起始点
+在波形模式下寻找最佳显示位置
+虽然函数名叫video_audio_display，但这部分代码确实只处理音频数据的可视化，将音频数据转换成可视化的形式（波形或频谱）以便在视频窗口中显示。这是FFplay中音频可视化的核心处理逻辑。
+
+后续的代码（这段之后）会负责实际的绘制工作，将处理后的音频数据绘制到显示窗口中，所以整个函数虽然涉及视频显示，但这部分代码确实主要是在处理音频数据的计算和准备工作。
+*/
 static void video_audio_display(VideoState *s)
 {
-    int i, i_start, x, y1, y, ys, delay, n, nb_display_channels;
-    int ch, channels, h, h2;
-    int64_t time_diff;
-    int rdft_bits, nb_freq;
+    // int i, i_start, x, y1, y, ys, delay, n, nb_display_channels;
+    // int ch, channels, h, h2;
+    // int64_t time_diff;
+    // int rdft_bits, nb_freq;
 
-    for (rdft_bits = 1; (1 << rdft_bits) < 2 * s->height; rdft_bits++)
-        ;
-    nb_freq = 1 << (rdft_bits - 1);
+    // for (rdft_bits = 1; (1 << rdft_bits) < 2 * s->height; rdft_bits++)
+    //     ;
+    // nb_freq = 1 << (rdft_bits - 1);
 
-    /* compute display index : center on currently output samples */
-    channels = s->audio_tgt.ch_layout.nb_channels;
-    nb_display_channels = channels;
-    if (!s->paused) {
-        int data_used= s->show_mode == SHOW_MODE_WAVES ? s->width : (2*nb_freq);
-        n = 2 * channels;
-        delay = s->audio_write_buf_size;
-        delay /= n;
+    // /* compute display index : center on currently output samples */
+    // channels = s->audio_tgt.ch_layout.nb_channels;
+    // nb_display_channels = channels;
+    // if (!s->paused) {
+    //     int data_used= s->show_mode == SHOW_MODE_WAVES ? s->width : (2*nb_freq);
+    //     n = 2 * channels;
+    //     delay = s->audio_write_buf_size;
+    //     delay /= n;
 
-        /* to be more precise, we take into account the time spent since
-           the last buffer computation */
-        if (audio_callback_time) {
-            time_diff = av_gettime_relative() - audio_callback_time;
-            delay -= (time_diff * s->audio_tgt.freq) / 1000000;
-        }
+    //     /* to be more precise, we take into account the time spent since
+    //        the last buffer computation */
+    //     if (audio_callback_time) {
+    //         time_diff = av_gettime_relative() - audio_callback_time;
+    //         delay -= (time_diff * s->audio_tgt.freq) / 1000000;
+    //     }
 
-        delay += 2 * data_used;
-        if (delay < data_used)
-            delay = data_used;
+    //     delay += 2 * data_used;
+    //     if (delay < data_used)
+    //         delay = data_used;
 
-        i_start= x = compute_mod(s->sample_array_index - delay * channels, SAMPLE_ARRAY_SIZE);
-        if (s->show_mode == SHOW_MODE_WAVES) {
-            h = INT_MIN;
-            for (i = 0; i < 1000; i += channels) {
-                int idx = (SAMPLE_ARRAY_SIZE + x - i) % SAMPLE_ARRAY_SIZE;
-                int a = s->sample_array[idx];
-                int b = s->sample_array[(idx + 4 * channels) % SAMPLE_ARRAY_SIZE];
-                int c = s->sample_array[(idx + 5 * channels) % SAMPLE_ARRAY_SIZE];
-                int d = s->sample_array[(idx + 9 * channels) % SAMPLE_ARRAY_SIZE];
-                int score = a - d;
-                if (h < score && (b ^ c) < 0) {
-                    h = score;
-                    i_start = idx;
-                }
-            }
-        }
+    //     i_start= x = compute_mod(s->sample_array_index - delay * channels, SAMPLE_ARRAY_SIZE);
+    //     if (s->show_mode == SHOW_MODE_WAVES) {
+    //         h = INT_MIN;
+    //         for (i = 0; i < 1000; i += channels) {
+    //             int idx = (SAMPLE_ARRAY_SIZE + x - i) % SAMPLE_ARRAY_SIZE;
+    //             int a = s->sample_array[idx];
+    //             int b = s->sample_array[(idx + 4 * channels) % SAMPLE_ARRAY_SIZE];
+    //             int c = s->sample_array[(idx + 5 * channels) % SAMPLE_ARRAY_SIZE];
+    //             int d = s->sample_array[(idx + 9 * channels) % SAMPLE_ARRAY_SIZE];
+    //             int score = a - d;
+    //             if (h < score && (b ^ c) < 0) {
+    //                 h = score;
+    //                 i_start = idx;
+    //             }
+    //         }
+    //     }
 
-        s->last_i_start = i_start;
-    } else {
-        i_start = s->last_i_start;
-    }
+    //     s->last_i_start = i_start;
+    // } else {
+    //     i_start = s->last_i_start;
+    // }
 
-    if (s->show_mode == SHOW_MODE_WAVES) {
-        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+    // if (s->show_mode == SHOW_MODE_WAVES) {
+    //     SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
 
-        /* total height for one channel */
-        h = s->height / nb_display_channels;
-        /* graph height / 2 */
-        h2 = (h * 9) / 20;
-        for (ch = 0; ch < nb_display_channels; ch++) {
-            i = i_start + ch;
-            y1 = s->ytop + ch * h + (h / 2); /* position of center line */
-            for (x = 0; x < s->width; x++) {
-                y = (s->sample_array[i] * h2) >> 15;
-                if (y < 0) {
-                    y = -y;
-                    ys = y1 - y;
-                } else {
-                    ys = y1;
-                }
-                fill_rectangle(s->xleft + x, ys, 1, y);
-                i += channels;
-                if (i >= SAMPLE_ARRAY_SIZE)
-                    i -= SAMPLE_ARRAY_SIZE;
-            }
-        }
+    //     /* total height for one channel */
+    //     h = s->height / nb_display_channels;
+    //     /* graph height / 2 */
+    //     h2 = (h * 9) / 20;
+    //     for (ch = 0; ch < nb_display_channels; ch++) {
+    //         i = i_start + ch;
+    //         y1 = s->ytop + ch * h + (h / 2); /* position of center line */
+    //         for (x = 0; x < s->width; x++) {
+    //             y = (s->sample_array[i] * h2) >> 15;
+    //             if (y < 0) {
+    //                 y = -y;
+    //                 ys = y1 - y;
+    //             } else {
+    //                 ys = y1;
+    //             }
+    //             fill_rectangle(s->xleft + x, ys, 1, y);
+    //             i += channels;
+    //             if (i >= SAMPLE_ARRAY_SIZE)
+    //                 i -= SAMPLE_ARRAY_SIZE;
+    //         }
+    //     }
 
-        SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
+    //     SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
 
-        for (ch = 1; ch < nb_display_channels; ch++) {
-            y = s->ytop + ch * h;
-            fill_rectangle(s->xleft, y, s->width, 1);
-        }
-    } else {
-        int err = 0;
-        if (realloc_texture(&s->vis_texture, SDL_PIXELFORMAT_ARGB8888, s->width, s->height, SDL_BLENDMODE_NONE, 1) < 0)
-            return;
+    //     for (ch = 1; ch < nb_display_channels; ch++) {
+    //         y = s->ytop + ch * h;
+    //         fill_rectangle(s->xleft, y, s->width, 1);
+    //     }
+    // } else {
+    //     int err = 0;
+    //     if (realloc_texture(&s->vis_texture, SDL_PIXELFORMAT_ARGB8888, s->width, s->height, SDL_BLENDMODE_NONE, 1) < 0)
+    //         return;
 
-        if (s->xpos >= s->width)
-            s->xpos = 0;
-        nb_display_channels= FFMIN(nb_display_channels, 2);
-        if (rdft_bits != s->rdft_bits) {
-            const float rdft_scale = 1.0;
-            av_tx_uninit(&s->rdft);
-            av_freep(&s->real_data);
-            av_freep(&s->rdft_data);
-            s->rdft_bits = rdft_bits;
-            s->real_data = av_malloc_array(nb_freq, 4 *sizeof(*s->real_data));
-            s->rdft_data = av_malloc_array(nb_freq + 1, 2 *sizeof(*s->rdft_data));
-            err = av_tx_init(&s->rdft, &s->rdft_fn, AV_TX_FLOAT_RDFT,
-                             0, 1 << rdft_bits, &rdft_scale, 0);
-        }
-        if (err < 0 || !s->rdft_data) {
-            av_log(NULL, AV_LOG_ERROR, "Failed to allocate buffers for RDFT, switching to waves display\n");
-            s->show_mode = SHOW_MODE_WAVES;
-        } else {
-            float *data_in[2];
-            AVComplexFloat *data[2];
-            SDL_Rect rect = {.x = s->xpos, .y = 0, .w = 1, .h = s->height};
-            uint32_t *pixels;
-            int pitch;
-            for (ch = 0; ch < nb_display_channels; ch++) {
-                data_in[ch] = s->real_data + 2 * nb_freq * ch;
-                data[ch] = s->rdft_data + nb_freq * ch;
-                i = i_start + ch;
-                for (x = 0; x < 2 * nb_freq; x++) {
-                    double w = (x-nb_freq) * (1.0 / nb_freq);
-                    data_in[ch][x] = s->sample_array[i] * (1.0 - w * w);
-                    i += channels;
-                    if (i >= SAMPLE_ARRAY_SIZE)
-                        i -= SAMPLE_ARRAY_SIZE;
-                }
-                s->rdft_fn(s->rdft, data[ch], data_in[ch], sizeof(float));
-                data[ch][0].im = data[ch][nb_freq].re;
-                data[ch][nb_freq].re = 0;
-            }
-            /* Least efficient way to do this, we should of course
-             * directly access it but it is more than fast enough. */
-            if (!SDL_LockTexture(s->vis_texture, &rect, (void **)&pixels, &pitch)) {
-                pitch >>= 2;
-                pixels += pitch * s->height;
-                for (y = 0; y < s->height; y++) {
-                    double w = 1 / sqrt(nb_freq);
-                    int a = sqrt(w * sqrt(data[0][y].re * data[0][y].re + data[0][y].im * data[0][y].im));
-                    int b = (nb_display_channels == 2 ) ? sqrt(w * hypot(data[1][y].re, data[1][y].im))
-                                                        : a;
-                    a = FFMIN(a, 255);
-                    b = FFMIN(b, 255);
-                    pixels -= pitch;
-                    *pixels = (a << 16) + (b << 8) + ((a+b) >> 1);
-                }
-                SDL_UnlockTexture(s->vis_texture);
-            }
-            SDL_RenderCopy(renderer, s->vis_texture, NULL, NULL);
-        }
-        if (!s->paused)
-            s->xpos++;
-    }
+    //     if (s->xpos >= s->width)
+    //         s->xpos = 0;
+    //     nb_display_channels= FFMIN(nb_display_channels, 2);
+    //     if (rdft_bits != s->rdft_bits) {
+    //         const float rdft_scale = 1.0;
+    //         av_tx_uninit(&s->rdft);
+    //         av_freep(&s->real_data);
+    //         av_freep(&s->rdft_data);
+    //         s->rdft_bits = rdft_bits;
+    //         s->real_data = av_malloc_array(nb_freq, 4 *sizeof(*s->real_data));
+    //         s->rdft_data = av_malloc_array(nb_freq + 1, 2 *sizeof(*s->rdft_data));
+    //         err = av_tx_init(&s->rdft, &s->rdft_fn, AV_TX_FLOAT_RDFT,
+    //                          0, 1 << rdft_bits, &rdft_scale, 0);
+    //     }
+    //     if (err < 0 || !s->rdft_data) {
+    //         av_log(NULL, AV_LOG_ERROR, "Failed to allocate buffers for RDFT, switching to waves display\n");
+    //         s->show_mode = SHOW_MODE_WAVES;
+    //     } else {
+    //         float *data_in[2];
+    //         AVComplexFloat *data[2];
+    //         SDL_Rect rect = {.x = s->xpos, .y = 0, .w = 1, .h = s->height};
+    //         uint32_t *pixels;
+    //         int pitch;
+    //         for (ch = 0; ch < nb_display_channels; ch++) {
+    //             data_in[ch] = s->real_data + 2 * nb_freq * ch;
+    //             data[ch] = s->rdft_data + nb_freq * ch;
+    //             i = i_start + ch;
+    //             for (x = 0; x < 2 * nb_freq; x++) {
+    //                 double w = (x-nb_freq) * (1.0 / nb_freq);
+    //                 data_in[ch][x] = s->sample_array[i] * (1.0 - w * w);
+    //                 i += channels;
+    //                 if (i >= SAMPLE_ARRAY_SIZE)
+    //                     i -= SAMPLE_ARRAY_SIZE;
+    //             }
+    //             s->rdft_fn(s->rdft, data[ch], data_in[ch], sizeof(float));
+    //             data[ch][0].im = data[ch][nb_freq].re;
+    //             data[ch][nb_freq].re = 0;
+    //         }
+    //         /* Least efficient way to do this, we should of course
+    //          * directly access it but it is more than fast enough. */
+    //         if (!SDL_LockTexture(s->vis_texture, &rect, (void **)&pixels, &pitch)) {
+    //             pitch >>= 2;
+    //             pixels += pitch * s->height;
+    //             for (y = 0; y < s->height; y++) {
+    //                 double w = 1 / sqrt(nb_freq);
+    //                 int a = sqrt(w * sqrt(data[0][y].re * data[0][y].re + data[0][y].im * data[0][y].im));
+    //                 int b = (nb_display_channels == 2 ) ? sqrt(w * hypot(data[1][y].re, data[1][y].im))
+    //                                                     : a;
+    //                 a = FFMIN(a, 255);
+    //                 b = FFMIN(b, 255);
+    //                 pixels -= pitch;
+    //                 *pixels = (a << 16) + (b << 8) + ((a+b) >> 1);
+    //             }
+    //             SDL_UnlockTexture(s->vis_texture);
+    //         }
+    //         SDL_RenderCopy(renderer, s->vis_texture, NULL, NULL);
+    //     }
+    //     if (!s->paused)
+    //         s->xpos++;
+    // }
 }
 
 static void stream_component_close(VideoState *is, int stream_index)
@@ -1376,6 +1391,9 @@ static int video_open(VideoState *is)
 }
 
 /* display the current picture, if any */
+/* 显示，只可能显示图片或者音频波形、音频频谱
+ 所以这里 video_audio_display 为显示 音频波形、音频频谱
+ video_image_display 为显示 图片 */
 static void video_display(VideoState *is)
 {
     if (!is->width)
@@ -1383,6 +1401,7 @@ static void video_display(VideoState *is)
 
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
     SDL_RenderClear(renderer);
+    // show_mode 默认为 SHOW_MODE_VIDEO:0 显示图片而不是 显示音频波形、音频频谱
     if (is->audio_st && is->show_mode != SHOW_MODE_VIDEO)
         video_audio_display(is);
     else if (is->video_st)
@@ -1549,6 +1568,11 @@ static double compute_target_delay(double delay, VideoState *is)
     if (get_master_sync_type(is) != AV_SYNC_VIDEO_MASTER) {
         /* if video is slave, we try to correct big delays by
            duplicating or deleting a frame */
+        /* 如果视频时钟和主时钟差距不大的话，就可以正常按照delay后显示下一帧图像。
+          如果视频显示的比主时钟块了，要放慢视频的速度，就得加大 delay
+          如果视频慢了，就得减小 delay。或者直接跳过帧。
+          diff为负：视频落后于主时钟（通常是音频）
+          diff为正：视频比主时钟块 */
         diff = get_clock(&is->vidclk) - get_master_clock(is);
 
         /* skip or repeat frame. We take into account the
@@ -1556,12 +1580,12 @@ static double compute_target_delay(double delay, VideoState *is)
            if it is the best guess */
         sync_threshold = FFMAX(AV_SYNC_THRESHOLD_MIN, FFMIN(AV_SYNC_THRESHOLD_MAX, delay));
         if (!isnan(diff) && fabs(diff) < is->max_frame_duration) {
-            if (diff <= -sync_threshold)
+            if (diff <= -sync_threshold) // 视频时钟慢了，要减小延迟，diff 是负数，所以这里 delay+diff，
                 delay = FFMAX(0, delay + diff);
             else if (diff >= sync_threshold && delay > AV_SYNC_FRAMEDUP_THRESHOLD)
-                delay = delay + diff;
+                delay = delay + diff;   // 视频时钟快了，且超过了规定的阈值，直接放大延迟等主时钟赶上来再显示下一帧。
             else if (diff >= sync_threshold)
-                delay = 2 * delay;
+                delay = 2 * delay; // 视频时钟快了，但快的不多，显示一个重复帧，这样慢慢过渡到与主时钟同步。
         }
     }
 
@@ -1633,6 +1657,7 @@ static void video_refresh(void *opaque, double *remaining_time)
             video_display(is);
             is->last_vis_time = time;
         }
+        // 这里按照rdft的播放速度更新一下 remain_time。后面如果其他需要更低的间隔，也还会更新。
         *remaining_time = FFMIN(*remaining_time, is->last_vis_time + rdftspeed - time);
     }
 
@@ -1645,14 +1670,40 @@ retry:
             Frame *vp, *lastvp;
 
             /* dequeue the picture */
+            /* 帧队列并不会删除已经播放的帧，只是记录上一次播放的帧的位置 */
             lastvp = frame_queue_peek_last(&is->pictq);
             vp = frame_queue_peek(&is->pictq);
 
+            /* 这段代码是处理视频帧序列号（serial）不匹配的情况，这是一个很重要的同步和丢帧机制。让我详细解释：
+
+                首先理解这几个关键变量：
+                lastvp: 指向帧队列中最后一个显示的帧
+                vp: 指向当前要显示的帧
+                serial: 序列号，用于跟踪视频流的连续性
+                序列号（serial）的作用：
+                当发生seek操作（快进/快退）时，serial会增加
+                当视频流发生中断或切换时，serial也会改变
+                用于标识不同的播放序列，确保帧的连续性
+
+                当帧的serial与当前视频队列的serial不匹配时，说明：可能发生了seek操作或者视频流已经切换
+            这个帧已经是"过时"的帧            为什么要这样做：
+                防止显示错误的帧：比如seek后显示seek之前的帧
+                确保画面的连续性：丢弃不属于当前播放序列的帧
+                快速同步到新的播放位置：尤其是在seek操作后
+                这是FFplay中很重要的一个同步机制，确保在各种情况下（特别是seek操作后）都能正确显示视频帧，避免显示错误或过时的画面
+            */
+            /* 注意这里比较的两方：一个是包队列的serial，一个是帧队列的serial。
+               seek 后，包队列的会serial先更新，解码后，帧队列新到的帧也是这个新的 serial。这样
+               就能及时显示最新的帧。
+             */
             if (vp->serial != is->videoq.serial) {
                 frame_queue_next(&is->pictq);
                 goto retry;
             }
 
+            /* 如果上一帧的序列号与当前帧的序列号不匹配，说明发送了 seek，要更新时间。
+             frame_timer 是FFplay中视频时间控制的核心变量，它帮助播放器维持正确的播放速度和帧率，特别是在seek操作后需要重新建立时间基准点的情况下。
+             frame_timer 记录的是上一帧的理论显示时间点。*/
             if (lastvp->serial != vp->serial)
                 is->frame_timer = av_gettime_relative() / 1000000.0;
 
@@ -1660,24 +1711,40 @@ retry:
                 goto display;
 
             /* compute nominal last_duration */
+            /* 获取当前时间
+                检查是否到达显示下一帧的时间点
+                如果还没到时间：
+                更新remaining_time（还需要等待的时间）
+                直接跳转到显示当前帧（goto display）
+                避免过早显示下一帧
+            */
+            /* 计算两帧之间的理论显示时间间隔, 正常情况为两帧 pts 之差*/
             last_duration = vp_duration(is, lastvp, vp);
+            /* compute_target_delay会考虑音视频同步,可能会根据音频时钟调整延迟时间,这个延迟值是为了保持音视频同步*/
             delay = compute_target_delay(last_duration, is);
 
             time= av_gettime_relative()/1000000.0;
+            /* ，frame_timer 记录的是上一帧的理论显示时间点。*/
             if (time < is->frame_timer + delay) {
+                /* 如果还没到显示下一帧的时间点，则更新remaining_time（还需要等待的时间）
+                  继续显示当前帧*/
                 *remaining_time = FFMIN(is->frame_timer + delay - time, *remaining_time);
                 goto display;
             }
-
+            /* 如果到了显示下一帧的时间了。更新帧的刷新时间。 */
             is->frame_timer += delay;
             if (delay > 0 && time - is->frame_timer > AV_SYNC_THRESHOLD_MAX)
+                // 如果已经超过最大同步阈值，则将帧的刷新时间重置为当前时间。
                 is->frame_timer = time;
 
             pthread_mutex_lock(&is->pictq.mutex);
             if (!isnan(vp->pts))
+                // 更新视频时钟的当前时间
                 update_video_pts(is, vp->pts, vp->serial);
             pthread_mutex_unlock(&is->pictq.mutex);
 
+            /* 这段代码实现了视频的丢帧逻辑：当视频播放落后太多（当前时间超过了帧的理论显示时间+持续时间）
+              且允许丢帧（framedrop>0）时，就直接跳过当前帧，显示下一帧，以追赶音频或保持播放速度*/
             if (frame_queue_nb_remaining(&is->pictq) > 1) {
                 Frame *nextvp = frame_queue_peek_next(&is->pictq);
                 duration = vp_duration(is, vp, nextvp);
@@ -1722,18 +1789,23 @@ retry:
                 }
             }
 
+            // 标记帧已显示，并更新帧队列
             frame_queue_next(&is->pictq);
+            // 只用通过 force_refresh flag 来显示当前帧。
             is->force_refresh = 1;
 
             if (is->step && !is->paused)
                 stream_toggle_pause(is);
         }
 display:
-        /* display picture */
+        /* display picture 显示图片 */
         if (!display_disable && is->force_refresh && is->show_mode == SHOW_MODE_VIDEO && is->pictq.rindex_shown)
             video_display(is);
     }
+    // 上面显示之后，要重置force_refresh
     is->force_refresh = 0;
+
+    // 这里只是输出一下状态信息。
     if (show_status) {
         AVBPrint buf;
         static int64_t last_time;
@@ -2350,6 +2422,7 @@ static void update_sample_display(VideoState *is, short *samples, int samples_si
 
 /* return the wanted number of samples to get better sync if sync_type is video
  * or external master clock */
+/* 音频作为主时钟时，啥都没干 */
 static int synchronize_audio(VideoState *is, int nb_samples)
 {
     int wanted_nb_samples = nb_samples;
@@ -2420,6 +2493,7 @@ static int audio_decode_frame(VideoState *is)
             return -1;
         frame_queue_next(&is->sampq);
     } while (af->serial != is->audioq.serial);
+    /* 这个af音频帧是已经填充好解码数据的，可以直接用于音频渲染。这个循环的主要目的是确保获取到与当前音频流序列号一致的解码帧。*/
 
     data_size = av_samples_get_buffer_size(NULL, af->frame->ch_layout.nb_channels,
                                            af->frame->nb_samples,
@@ -2427,6 +2501,7 @@ static int audio_decode_frame(VideoState *is)
 
     wanted_nb_samples = synchronize_audio(is, af->frame->nb_samples);
 
+    /* 动态检测音频参数变化，重新配置重采样器，确保音频数据正确转换到目标格式，保障播放的连续性和正确性。*/
     if (af->frame->format        != is->audio_src.fmt            ||
         av_channel_layout_compare(&af->frame->ch_layout, &is->audio_src.ch_layout) ||
         af->frame->sample_rate   != is->audio_src.freq           ||
@@ -3191,7 +3266,7 @@ Input #0, mov,mp4,m4a,3gp,3g2,mj2, from '1080x720p.mp4': 0B
                 播放音乐文件时显示专辑封面
                 视频文件的预览图
                 媒体库中显示缩略图
-            
+
         工作流程：
             检测到需要处理附加图片的请求
             确认视频流中有附加图片
@@ -3460,7 +3535,7 @@ static void toggle_audio_display(VideoState *is)
     }
 }
 
-/* 
+/*
 这是视频播放器的刷新循环函数，主要做三件事：
 
 鼠标光标处理：
